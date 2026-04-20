@@ -5,6 +5,7 @@ const cors = require("cors");
 const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 const graphData = require("./data/graph");
+const { failEdge, failNode } = require("./engine/failureEngine");
 
 const app = express();
 const server = http.createServer(app);
@@ -37,7 +38,7 @@ mongoose
 // ── Routes ───────────────────────────────────────────────────────
 app.get("/", (req, res) => {
   res.json({ message: "Terminus server is running 🚀" });
-});
+}); 
 
 app.get("/test", (req, res) => {
   res.json({ message: "API working properly 🚀" });
@@ -47,8 +48,24 @@ app.get("/graph", (req, res) => {
   res.json(graphData);
 });
 
-app.get("/test", (req, res) => {
-  res.json({ message: "API working properly 🚀" });
+app.get("/fail-edge/:id", (req, res) => {
+  const edgeId = req.params.id;
+  try {
+    const updatedGraph = failEdge(graphData, edgeId);
+    res.json({ success: true, graph: updatedGraph });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.get("/fail-node/:id", (req, res) => {
+  const nodeId = req.params.id;
+  try {
+    const updatedGraph = failNode(graphData, nodeId);
+    res.json({ success: true, graph: updatedGraph });
+  } catch (error) {
+    res.status(400).json({ success: false, error: error.message });
+  }
 });
 
 // ── Socket.io Events ────────────────────────────────────────────

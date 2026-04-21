@@ -4,7 +4,7 @@ function App() {
   const [graph, setGraph] = useState(null);
 
   useEffect(() => {
-    fetch("http://localhost:5000/graph")
+    fetch("http://localhost:5001/graph")
       .then((res) => res.json())
       .then((data) => setGraph(data));
   }, []);

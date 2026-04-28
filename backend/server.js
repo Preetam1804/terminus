@@ -7,6 +7,7 @@ const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 const baseGraph = require("./data/graph");
 let currentGraph = JSON.parse(JSON.stringify(baseGraph));
+let activeBaseGraph = JSON.parse(JSON.stringify(baseGraph));
 let simulationRunning = false;
 let liveIntervalId = null;
 const { failEdge, failNode } = require("./engine/failureEngine");
@@ -49,7 +50,7 @@ app.get("/status", (req, res) => {
 });
 
 app.get("/reset", (req, res) => {
-  currentGraph = JSON.parse(JSON.stringify(baseGraph));
+  currentGraph = JSON.parse(JSON.stringify(activeBaseGraph));
   simulationRunning = false;
   if (liveIntervalId) {
     clearInterval(liveIntervalId);
@@ -67,6 +68,104 @@ app.get("/test", (req, res) => {
 
 app.get("/graph", (req, res) => {
   res.json(currentGraph);
+});
+
+// ── User-built graph store (MongoDB) ────────────────────────────
+const GraphModel = require("./models/Graph");
+
+// POST /graph — validate and save a user-built graph, also set as currentGraph
+app.post("/graph", async (req, res) => {
+  const graph = req.body;
+
+  if (!graph || !Array.isArray(graph.nodes) || !Array.isArray(graph.edges)) {
+    return res.status(400).json({ error: "Invalid graph: nodes and edges arrays required" });
+  }
+  if (graph.nodes.length === 0) {
+    return res.status(400).json({ error: "Graph must have at least one node" });
+  }
+
+  const nodeIds = new Set(graph.nodes.map(n => n.id));
+
+  for (const edge of graph.edges) {
+    if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
+      return res.status(400).json({ error: `Edge ${edge.id} references missing node` });
+    }
+    if (!edge.capacity || edge.capacity <= 0) {
+      return res.status(400).json({ error: `Edge ${edge.id}: capacity must be > 0` });
+    }
+    if (edge.load < 0) {
+      return res.status(400).json({ error: `Edge ${edge.id}: load must be >= 0` });
+    }
+  }
+
+  try {
+    const toSave = {
+      name: graph.name || `Graph ${Date.now()}`,
+      nodes: graph.nodes,
+      edges: graph.edges.map(e => ({
+        ...e,
+        overloadTime: e.overloadTime ?? 0,
+        threshold:    e.threshold    ?? 3,
+        status:       "normal",
+      })),
+    };
+
+    let newGraph;
+    if (graph.id) {
+      newGraph = await GraphModel.findByIdAndUpdate(graph.id, toSave, { new: true });
+      if (!newGraph) newGraph = await GraphModel.create(toSave);
+    } else {
+      newGraph = await GraphModel.create(toSave);
+    }
+    
+    // Clean up Mongoose document for currentGraph
+    const plainGraph = newGraph.toObject();
+    
+    // Make it the active graph for simulation
+    activeBaseGraph = JSON.parse(JSON.stringify(plainGraph));
+    currentGraph = JSON.parse(JSON.stringify(plainGraph));
+
+    res.json({ message: "Graph saved successfully", id: newGraph._id, graph: currentGraph });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to save graph to DB" });
+  }
+});
+
+// GET /graph/:id — load a saved user graph
+app.get("/graph/:id", async (req, res) => {
+  try {
+    const g = await GraphModel.findById(req.params.id);
+    if (!g) return res.status(404).json({ error: "Graph not found" });
+    res.json(g);
+  } catch (error) {
+    res.status(500).json({ error: "Invalid graph ID" });
+  }
+});
+
+// DELETE /graph/:id — delete a saved user graph
+app.delete("/graph/:id", async (req, res) => {
+  try {
+    await GraphModel.findByIdAndDelete(req.params.id);
+    res.json({ message: "Graph deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to delete graph" });
+  }
+});
+
+// GET /graphs — list all saved graphs (name + id)
+app.get("/graphs", async (req, res) => {
+  try {
+    const graphs = await GraphModel.find({}, "name nodes edges createdAt");
+    const list = graphs.map(g => ({
+      id: g._id,
+      name: g.name,
+      nodes: g.nodes.length,
+      edges: g.edges.length,
+    }));
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch graphs" });
+  }
 });
 
 app.get("/fail-edge/:id", (req, res) => {
